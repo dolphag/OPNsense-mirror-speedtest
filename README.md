@@ -1,5 +1,99 @@
 # OPNsense Mirror Speed Test
 
+A shell script that benchmarks **OPNsense pkg repository mirrors** and identifies the fastest one for your location.
+
+Tests all 16 mirrors listed in `System > Firmware > Settings > Mirror` dropdown, measuring DNS lookup time, connection time, TTFB, and download speed, then displays a ranked summary.
+
+## Requirements
+
+| Environment | How to run |
+|-------------|------------|
+| Ubuntu 24.04 | `bash opnsense-mirror-speedtest.sh` |
+| OPNsense 26.7 (tcsh) | `sh opnsense-mirror-speedtest.sh` |
+
+Dependencies: `curl` and `awk` (both available by default)
+
+## Usage
+
+```sh
+sh opnsense-mirror-speedtest.sh
+```
+
+### Example output
+
+```
+OPNsense PKG Mirror Speed Test  v26.7 / FreeBSD:15:amd64
+
+Testing 16 mirrors [parallel]...
+  Waiting... done
+
+Mirror                   Status        DNS   Connect     TTFB Speed        Bar (relative)
+───────────────────────────────────────────────────────────────────────────────────────────────
+LeaseWeb AMS (NL)        OK           12ms      45ms    120ms 8.43 MB/s    ██████████████████████
+LeaseWeb FRA (DE)        OK           14ms      48ms    135ms 6.21 MB/s    ████████████████░░░░░░
+Aalborg Univ (DK)        OK           18ms      62ms    180ms 5.10 MB/s    █████████████░░░░░░░░░
+...
+Ventura Sys (CO)         FAIL:000      ---       ---      ---
+───────────────────────────────────────────────────────────────────────────────────────────────
+
+Fastest mirror : LeaseWeb AMS (NL)
+URL            : https://mirror.ams1.nl.leaseweb.net/opnsense
+Speed          : 8.43 MB/s  (TTFB: 120ms)
+
+To apply in OPNsense:
+  System > Firmware > Settings > Mirror
+  → LeaseWeb AMS (NL)
+
+OK: 14 / Failed: 2
+```
+
+## Options (environment variables)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VERSION` | `26.7` | OPNsense version to test against |
+| `PARALLEL` | `1` | `1` = parallel (fast), `0` = sequential (shows progress) |
+| `SPEED_MB` | `2` | Data size in MB for speed test |
+| `NO_COLOR` | — | Set to `1` to disable color output |
+
+> **About `FREEBSD_ABI`**  
+> The FreeBSD ABI string (e.g. `FreeBSD:15:amd64`) is embedded in mirror URL paths. On OPNsense it is auto-detected via `pkg config abi`. Override with the environment variable when testing from a non-OPNsense host.
+
+```sh
+# Sequential execution with 5 MB speed test
+PARALLEL=0 SPEED_MB=5 sh opnsense-mirror-speedtest.sh
+
+# aarch64 target
+FREEBSD_ABI=FreeBSD:15:aarch64 sh opnsense-mirror-speedtest.sh
+
+# Test against an older release (26.1)
+VERSION=26.1 FREEBSD_ABI=FreeBSD:14:amd64 sh opnsense-mirror-speedtest.sh
+```
+
+## How it works
+
+Each mirror is tested in two phases:
+
+| Phase | File | Metrics |
+|-------|------|---------|
+| 1. Latency | `meta.conf` (a few KB) | DNS time, connect time, TTFB |
+| 2. Speed | `packagesite.pkg` (first 2 MB) | Download speed |
+
+## Mirror list source
+
+The mirror list is sourced from the [opnsense/core](https://github.com/opnsense/core) repository:  
+`src/opnsense/mvc/app/models/OPNsense/Core/repositories/opnsense.xml`
+
+Deciso commercial mirrors (subscription required) are excluded.
+
+## License
+
+[BSD 2-Clause License](LICENSE)
+
+---
+
+# OPNsense ミラー速度計測
+
 OPNsense の **pkgリポジトリミラー** の速度を計測し、最速ミラーを特定するシェルスクリプトです。
 
 `System > Firmware > Settings > Mirror` のプルダウンに掲載されているミラーサイト全16件を対象に、DNS解決時間・接続時間・TTFB・ダウンロード速度を測定し、結果を一覧表示します。
@@ -19,38 +113,6 @@ OPNsense の **pkgリポジトリミラー** の速度を計測し、最速ミ�
 sh opnsense-mirror-speedtest.sh
 ```
 
-### 出力例
-
-```
-OPNsense PKG Mirror Speed Test  v26.7 / FreeBSD:15:amd64
-
-レイテンシ測定: {mirror}/FreeBSD:15:amd64/26.7/latest/meta.conf
-速度測定      : {mirror}/FreeBSD:15:amd64/26.7/latest/packagesite.pkg (先頭2MB)
-
-Testing 16 mirrors [並列実行]...
-  待機中 完了
-
-Mirror                   Status        DNS   Connect     TTFB Speed        Bar (相対速度)
-───────────────────────────────────────────────────────────────────────────────────────────────
-LeaseWeb AMS (NL)        OK           12ms      45ms    120ms 8.43 MB/s    ██████████████████████
-LeaseWeb FRA (DE)        OK           14ms      48ms    135ms 6.21 MB/s    ████████████████░░░░░░
-Aalborg Univ (DK)        OK           18ms      62ms    180ms 5.10 MB/s    █████████████░░░░░░░░░
-OPNsense (NL)            OK           20ms      70ms    195ms 4.87 MB/s    ████████████░░░░░░░░░░
-...
-Ventura Sys (CO)         FAIL:000      ---       ---      ---
-───────────────────────────────────────────────────────────────────────────────────────────────
-
-最速ミラー : LeaseWeb AMS (NL)
-URL        : https://mirror.ams1.nl.leaseweb.net/opnsense
-速度       : 8.43 MB/s  (TTFB: 120ms)
-
-OPNsense Settings への設定:
-  System > Firmware > Settings > Mirror
-  → LeaseWeb AMS (NL)
-
-成功: 14 / 失敗: 2
-```
-
 ## オプション（環境変数）
 
 | 変数 | デフォルト | 説明 |
@@ -61,18 +123,7 @@ OPNsense Settings への設定:
 | `NO_COLOR` | — | `1` を指定するとカラー出力を無効化 |
 
 > **`FREEBSD_ABI` について**  
-> URLパスに必要な FreeBSD ABI 文字列（例: `FreeBSD:15:amd64`）は、OPNsense上では `pkg config abi` で自動取得します。Ubuntu等で別バージョンをテストする場合は環境変数で上書き可能です。
-
-```sh
-# 例: 逐次実行・5MB測定
-PARALLEL=0 SPEED_MB=5 sh opnsense-mirror-speedtest.sh
-
-# 例: aarch64環境
-FREEBSD_ABI=FreeBSD:15:aarch64 sh opnsense-mirror-speedtest.sh
-
-# 例: 旧バージョン (26.1) をテスト
-VERSION=26.1 FREEBSD_ABI=FreeBSD:14:amd64 sh opnsense-mirror-speedtest.sh
-```
+> URLパスに必要な FreeBSD ABI 文字列（例: `FreeBSD:15:amd64`）は、OPNsense上では `pkg config abi` で自動取得します。Ubuntu等から実行する場合は環境変数で上書き可能です。
 
 ## 測定内容
 

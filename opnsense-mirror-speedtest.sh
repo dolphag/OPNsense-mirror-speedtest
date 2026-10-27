@@ -5,34 +5,38 @@
 # Ubuntu 24.04 : bash opnsense-mirror-speedtest.sh
 #                sh   opnsense-mirror-speedtest.sh
 # OPNsense 26.7: sh   opnsense-mirror-speedtest.sh
+#   (tcsh users: run as  sh opnsense-mirror-speedtest.sh)
 #   (tcsh ユーザーは  sh opnsense-mirror-speedtest.sh  で実行)
 #
-# 環境変数:
-#   VERSION=26.7                  テスト対象バージョン       (デフォルト: 26.7)
-
-#   PARALLEL=1                    1=並列実行, 0=逐次          (デフォルト: 1)
-#   SPEED_MB=2                    速度テストの取得量MB         (デフォルト: 2)
-#   NO_COLOR=1                    カラー出力を無効化
+# Environment variables / 環境変数:
+#   VERSION=26.7   OPNsense version to test / テスト対象バージョン (default: 26.7)
+#   PARALLEL=1     1=parallel (fast), 0=sequential / 1=並列実行, 0=逐次 (default: 1)
+#   SPEED_MB=2     MB to download for speed test / 速度テストの取得量MB (default: 2)
+#   NO_COLOR=1     Disable color output / カラー出力を無効化
 # =============================================================================
 
 set -u
 
-# ── ユーザー設定 ────────────────────────────────────────────────────────────────
+# ── Configuration / ユーザー設定 ────────────────────────────────────────────────
 OPNSENSE_VER="${VERSION:-26.7}"
-# OPNsense上では pkg config abi で自動取得、Ubuntu等では環境変数かデフォルト値を使用
-# URLパス構造: {mirror}/{FreeBSD ABI}/{VERSION}/latest/
+# On OPNsense, ABI is auto-detected via `pkg config abi`.
+# On other hosts, override with FREEBSD_ABI=FreeBSD:15:amd64.
+# OPNsense上では pkg config abi で自動取得。他環境では環境変数で上書き可能。
+# URL path structure / URLパス構造: {mirror}/{FreeBSD ABI}/{VERSION}/latest/
 _detected_abi=$(pkg config abi 2>/dev/null || true)
 FREEBSD_ABI="${FREEBSD_ABI:-${_detected_abi:-FreeBSD:15:amd64}}"
-CONNECT_TIMEOUT=5      # 接続タイムアウト(秒)
-TEST_TIMEOUT=25        # テスト全体のタイムアウト(秒)
+CONNECT_TIMEOUT=5      # Connection timeout in seconds / 接続タイムアウト(秒)
+TEST_TIMEOUT=25        # Max time per test in seconds / テスト全体のタイムアウト(秒)
 SPEED_MB="${SPEED_MB:-2}"
 PARALLEL="${PARALLEL:-1}"
 
-# ── ミラーリスト (名称|ベースURL) ────────────────────────────────────────────────
-# 出典: opnsense/core リポジトリ
+# ── Mirror list / ミラーリスト (Name|Base URL) ───────────────────────────────
+# Source / 出典: opnsense/core
 #   src/opnsense/mvc/app/models/OPNsense/Core/repositories/opnsense.xml
-# System > Firmware > Settings の Mirror プルダウンと同一リスト
-# ※ Deciso 商用ミラー (要サブスクリプション) は除外
+# Matches the Mirror dropdown in System > Firmware > Settings.
+# System > Firmware > Settings の Mirror プルダウンと同一リスト。
+# Deciso commercial mirrors (subscription required) are excluded.
+# Deciso 商用ミラー (要サブスクリプション) は除外。
 MIRRORS='OPNsense (NL)|https://pkg.opnsense.org
 LeaseWeb AMS (NL)|https://mirror.ams1.nl.leaseweb.net/opnsense
 LeaseWeb FRA (DE)|https://mirror.fra10.de.leaseweb.net/opnsense
@@ -51,16 +55,16 @@ MARWAN (MA)|http://mirror.marwan.ma/opnsense
 Ventura Sys (CO)|http://mirror.venturasystems.tech/opnsense
 NTCT(TW)|https://mirror.ntct.edu.tw/opnsense/'
 
-# ── 派生パス (pkgリポジトリ構造) ─────────────────────────────────────────────
-# URL形式: {mirror}/{FreeBSD ABI}/{VERSION}/latest/
-# 出典: src/etc/pkg/repos/OPNsense.conf.shadow.in
+# ── Derived paths / 派生パス (pkg repository structure) ──────────────────────
+# URL format / URL形式: {mirror}/{FreeBSD ABI}/{VERSION}/latest/
+# Source / 出典: src/etc/pkg/repos/OPNsense.conf.shadow.in
 #   → "%%CORE_PACKAGESITE%%/${ABI}/%%CORE_ABI%%/latest"
 REPO_BASE="${FREEBSD_ABI}/${OPNSENSE_VER}/latest"
-LATENCY_PATH="${REPO_BASE}/meta.conf"           # 数KBの小ファイル (レイテンシ用)
-SPEED_PATH="${REPO_BASE}/packagesite.pkg"       # パッケージカタログ (速度用)
+LATENCY_PATH="${REPO_BASE}/meta.conf"      # Small file for latency / レイテンシ用小ファイル
+SPEED_PATH="${REPO_BASE}/packagesite.pkg"  # Package catalog for speed / 速度用パッケージカタログ
 SPEED_END=$(( SPEED_MB * 1048576 - 1 ))
 
-# ── ANSIカラー ───────────────────────────────────────────────────────────────
+# ── ANSI colors / ANSIカラー ─────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   cR='\033[0;31m'; cG='\033[0;32m'; cY='\033[1;33m'
   cC='\033[0;36m'; cW='\033[1m';   cN='\033[0m'
@@ -68,16 +72,16 @@ else
   cR=''; cG=''; cY=''; cC=''; cW=''; cN=''
 fi
 
-# ── 一時ディレクトリ ──────────────────────────────────────────────────────────
+# ── Temporary directory / 一時ディレクトリ ───────────────────────────────────
 _TMP="${TMPDIR:-/tmp}/opnspeed_$$"
 mkdir -p "${_TMP}"
 trap 'rm -rf "${_TMP}"' EXIT INT TERM
 
-# ── ヘルパー関数 ──────────────────────────────────────────────────────────────
-die() { printf "${cR}エラー: %s${cN}\n" "$*" >&2; exit 1; }
+# ── Helper functions / ヘルパー関数 ──────────────────────────────────────────
+die() { printf "${cR}Error / エラー: %s${cN}\n" "$*" >&2; exit 1; }
 
 require_cmd() {
-    command -v "$1" >/dev/null 2>&1 || die "'$1' が見つかりません。インストールしてください。"
+    command -v "$1" >/dev/null 2>&1 || die "'$1' not found. Please install it. / 見つかりません。インストールしてください。"
 }
 
 fmt_speed() {
@@ -112,15 +116,15 @@ hline() {
     awk -v n="${1:-88}" 'BEGIN { for(i=0;i<n;i++) printf "─"; print "" }'
 }
 
-# ── ミラーテスト関数 ─────────────────────────────────────────────────────────
-# 出力形式: name|url|status|dns_ms|con_ms|ttfb_ms|spd_bps
+# ── Mirror test function / ミラーテスト関数 ──────────────────────────────────
+# Output format / 出力形式: name|url|status|dns_ms|con_ms|ttfb_ms|spd_bps
 #   status: OK / FAIL:<httpcode>
 test_mirror() {
     local name="$1" base="$2" out="$3"
     local lat_url="${base}/${LATENCY_PATH}"
     local spd_url="${base}/${SPEED_PATH}"
 
-    # フェーズ1: レイテンシ測定 (meta.conf を取得)
+    # Phase 1: latency via meta.conf / フェーズ1: meta.conf でレイテンシ測定
     local raw http dns con ttfb
     raw=$(curl -sSL \
           --connect-timeout "${CONNECT_TIMEOUT}" \
@@ -140,7 +144,8 @@ test_mirror() {
         return
     fi
 
-    # フェーズ2: 速度測定 (packagesite.pkg の先頭 SPEED_MB MB をレンジ取得)
+    # Phase 2: speed via range-download of packagesite.pkg
+    # フェーズ2: packagesite.pkg の先頭 SPEED_MB MB をレンジ取得して速度測定
     local spd
     spd=$(curl -sSL \
           --connect-timeout "${CONNECT_TIMEOUT}" \
@@ -156,26 +161,28 @@ test_mirror() {
         "${name}" "${base}" "${dns}" "${con}" "${ttfb}" "${spd}" >"${out}"
 }
 
-# ── メイン ───────────────────────────────────────────────────────────────────
+# ── Main / メイン ────────────────────────────────────────────────────────────
 require_cmd curl
 require_cmd awk
 
 printf "${cW}${cC}OPNsense PKG Mirror Speed Test${cN}"
 printf "  v%s / %s\n\n" "${OPNSENSE_VER}" "${FREEBSD_ABI}"
-printf "レイテンシ測定: {mirror}/%s\n" "${LATENCY_PATH}"
-printf "速度測定      : {mirror}/%s (先頭%dMB)\n\n" "${SPEED_PATH}" "${SPEED_MB}"
+printf "Latency / レイテンシ測定: {mirror}/%s\n" "${LATENCY_PATH}"
+printf "Speed   / 速度測定      : {mirror}/%s (first %dMB / 先頭%dMB)\n\n" \
+    "${SPEED_PATH}" "${SPEED_MB}" "${SPEED_MB}"
 
-# ミラーリストをファイルに書き出す (while ループをサブシェル外で動かすため)
+# Write mirror list to file to keep while-loop in the main shell (not a subshell).
+# while ループをサブシェル外で動かすためミラーリストをファイルに書き出す。
 printf '%s\n' "${MIRRORS}" >"${_TMP}/mirrors"
 total=$(wc -l <"${_TMP}/mirrors" | tr -d ' \t')
 
 if [ "${PARALLEL}" -eq 1 ]; then
-    printf "Testing %d mirrors [並列実行]...\n" "${total}"
+    printf "Testing %d mirrors [parallel / 並列実行]...\n" "${total}"
 else
-    printf "Testing %d mirrors [逐次実行]...\n" "${total}"
+    printf "Testing %d mirrors [sequential / 逐次実行]...\n" "${total}"
 fi
 
-# テスト起動
+# Launch tests / テスト起動
 idx=0
 while IFS='|' read -r mname murl; do
     [ -z "${mname}" ] || [ -z "${murl}" ] && continue
@@ -198,14 +205,15 @@ while IFS='|' read -r mname murl; do
 done <"${_TMP}/mirrors"
 
 if [ "${PARALLEL}" -eq 1 ]; then
-    printf '  待機中'
+    printf '  Waiting / 待機中'
     wait
-    printf ' 完了\n'
+    printf ' done / 完了\n'
 fi
 
 printf '\n'
 
-# ── 結果収集・ソート ──────────────────────────────────────────────────────────
+# ── Collect and sort results / 結果収集・ソート ──────────────────────────────
+# OK entries sorted by speed desc, FAIL entries at the bottom.
 # OK→速度降順、FAIL→末尾
 cat "${_TMP}"/[0-9]* 2>/dev/null >"${_TMP}/all"
 
@@ -214,13 +222,13 @@ awk -F'|' '$3=="OK"  {print "0|" $0}
   | sort -t'|' -k1,1n -k8,8rn \
   | cut -d'|' -f2- >"${_TMP}/sorted"
 
-# 最大速度を取得 (バーのスケーリング用)
+# Find max speed for bar scaling / バーのスケーリング用に最大速度を取得
 MAX_SPD=$(awk -F'|' '$3=="OK" {s=$7+0; if(s>m)m=s} END{print (m>0?m:1)}' "${_TMP}/sorted")
 
-# ── 結果テーブル表示 ──────────────────────────────────────────────────────────
+# ── Print results table / 結果テーブル表示 ───────────────────────────────────
 printf "${cW}%-22s %-11s %7s %9s %8s %-12s %s${cN}\n" \
-    "Mirror" "Status" "DNS" "Connect" "TTFB" "Speed" "Bar (相対速度)"
-hline 95
+    "Mirror" "Status" "DNS" "Connect" "TTFB" "Speed" "Bar (relative / 相対速度)"
+hline 98
 
 rank=1
 while IFS='|' read -r name url status dns con ttfb spd; do
@@ -244,9 +252,9 @@ while IFS='|' read -r name url status dns con ttfb spd; do
     fi
 done <"${_TMP}/sorted"
 
-hline 95
+hline 98
 
-# ── サマリー ──────────────────────────────────────────────────────────────────
+# ── Summary / サマリー ────────────────────────────────────────────────────────
 printf '\n'
 best_line=$(awk -F'|' 'NR==1 && $3=="OK"{print $0}' "${_TMP}/sorted")
 if [ -n "${best_line}" ]; then
@@ -255,16 +263,16 @@ if [ -n "${best_line}" ]; then
     best_spd=$( printf '%s' "${best_line}" | cut -d'|' -f7)
     best_ttfb=$(printf '%s' "${best_line}" | cut -d'|' -f6)
 
-    printf "${cW}最速ミラー :${cN} %s\n" "${best_name}"
-    printf "${cW}URL        :${cN} %s\n" "${best_url}"
-    printf "${cW}速度       :${cN} %s  (TTFB: %s)\n" \
+    printf "${cW}Fastest mirror / 最速ミラー :${cN} %s\n" "${best_name}"
+    printf "${cW}URL                        :${cN} %s\n" "${best_url}"
+    printf "${cW}Speed / 速度               :${cN} %s  (TTFB: %s)\n" \
         "$(fmt_speed "${best_spd}")" "$(fmt_ms "${best_ttfb}")"
     printf '\n'
-    printf "${cW}OPNsense Settings への設定:${cN}\n"
+    printf "${cW}To apply in OPNsense / OPNsense Settings への設定:${cN}\n"
     printf "  System > Firmware > Settings > Mirror\n"
     printf "  → %s\n" "${best_name}"
 fi
 
 ok_count=$(  awk -F'|' '$3=="OK"  {c++} END{print c+0}' "${_TMP}/sorted")
 fail_count=$(awk -F'|' '$3!="OK" {c++} END{print c+0}' "${_TMP}/sorted")
-printf '\n成功: %d / 失敗: %d\n' "${ok_count}" "${fail_count}"
+printf '\nOK: %d / Failed / 失敗: %d\n' "${ok_count}" "${fail_count}"
